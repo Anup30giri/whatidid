@@ -5,12 +5,13 @@
 
 import { Command } from 'commander';
 import { loadConfig, validateConfig, ConfigError } from './config';
-import { GitHubClient, GitHubClientError } from './github/client';
+import { GitHubClient, GitHubClientError, type GitHubClientOptions } from './github/client';
 import { createLLMClient, LLMClientError } from './llm/client';
-import { LLMFeatureSummarizer, summarizePRs } from './llm/summarizer';
+import { LLMFeatureSummarizer, summarizePRsBatch } from './llm/summarizer';
 import { groupFeatures, calculateStats } from './domain/grouping';
-import { writeReport } from './report/markdown';
-import type { ImpactReport } from './domain/models';
+import { generateMarkdownReport, writeReport } from './report/markdown';
+import { initCache } from './cache';
+import type { ImpactReport, PullRequest } from './domain/models';
 
 /**
  * Validate date format (YYYY-MM-DD)
@@ -33,6 +34,13 @@ function parseDate(value: string, name: string): string {
     throw new Error(`Invalid date format for ${name}: "${value}". Expected YYYY-MM-DD.`);
   }
   return value;
+}
+
+/**
+ * Parse comma-separated list
+ */
+function parseList(value: string): string[] {
+  return value.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 /**
@@ -61,8 +69,26 @@ export function createProgram(): Command {
       (value) => parseDate(value, '--until')
     )
     .option('-o, --out <file>', 'Output file path', 'report.md')
+    .option('-f, --format <format>', 'Output format: markdown or json', 'markdown')
+    .option('--scope <scope>', 'Scope of repos to check: all, personal, or orgs (default: all)', 'all')
+    .option('--repos <repos>', 'Specific repos to include (comma-separated, owner/repo format)', parseList)
+    .option('--orgs <orgs>', 'Organizations to include (comma-separated)', parseList)
+    .option('--exclude-repos <repos>', 'Repos to exclude (comma-separated, owner/repo format)', parseList)
+    .option('--dry-run', 'Show PRs without LLM analysis')
+    .option('--no-cache', 'Disable caching of GitHub API responses')
+    .option('-v, --verbose', 'Verbose output')
+    .option('-q, --quiet', 'Minimal output')
     .action(async (options: GenerateOptions) => {
       await runGenerate(options);
+    });
+
+  program
+    .command('clear-cache')
+    .description('Clear cached GitHub API responses')
+    .action(async () => {
+      const cache = initCache(true);
+      await cache.clear();
+      console.log('Cache cleared.');
     });
 
   return program;
@@ -73,82 +99,197 @@ interface GenerateOptions {
   since: string;
   until: string;
   out: string;
+  format: 'markdown' | 'json';
+  scope: 'all' | 'personal' | 'orgs';
+  repos?: string[];
+  orgs?: string[];
+  excludeRepos?: string[];
+  dryRun?: boolean;
+  cache: boolean;
+  verbose?: boolean;
+  quiet?: boolean;
+}
+
+/**
+ * Logger utility based on verbosity settings
+ */
+function createLogger(options: GenerateOptions) {
+  const isQuiet = options.quiet;
+  const isVerbose = options.verbose;
+
+  return {
+    log: (message: string) => {
+      if (!isQuiet) console.log(message);
+    },
+    verbose: (message: string) => {
+      if (isVerbose && !isQuiet) console.log(message);
+    },
+    progress: (message: string) => {
+      if (!isQuiet) process.stdout.write(message);
+    },
+    error: (message: string) => {
+      console.error(message);
+    },
+  };
+}
+
+/**
+ * Print PR list for dry-run mode
+ */
+function printPRList(prs: PullRequest[], logger: ReturnType<typeof createLogger>): void {
+  // Group by repo
+  const byRepo = new Map<string, PullRequest[]>();
+  for (const pr of prs) {
+    const existing = byRepo.get(pr.repoFullName) ?? [];
+    existing.push(pr);
+    byRepo.set(pr.repoFullName, existing);
+  }
+
+  logger.log('\n📋 Pull Requests Found:\n');
+
+  for (const [repo, repoPRs] of byRepo) {
+    logger.log(`\n## ${repo} (${repoPRs.length} PRs)`);
+    for (const pr of repoPRs) {
+      const date = new Date(pr.mergedAt).toLocaleDateString();
+      logger.log(`  - #${pr.number}: ${pr.title} (${date})`);
+    }
+  }
+
+  logger.log(`\n\nTotal: ${prs.length} PRs across ${byRepo.size} repositories`);
+  logger.log('\nRun without --dry-run to generate the full report with LLM analysis.');
 }
 
 /**
  * Run the generate command
  */
 async function runGenerate(options: GenerateOptions): Promise<void> {
-  const { user, since, until, out } = options;
+  const { user, since, until, out, format, dryRun, cache } = options;
+  const logger = createLogger(options);
 
-  console.log('');
-  console.log('╔════════════════════════════════════════╗');
-  console.log('║       whatidid - Impact Report         ║');
-  console.log('╚════════════════════════════════════════╝');
-  console.log('');
+  // Initialize cache
+  initCache(cache);
+
+  logger.log('');
+  logger.log('╔════════════════════════════════════════╗');
+  logger.log('║       whatidid - Impact Report         ║');
+  logger.log('╚════════════════════════════════════════╝');
+  logger.log('');
 
   // Validate date range
   if (new Date(since) > new Date(until)) {
-    console.error('Error: --since date must be before --until date');
+    logger.error('Error: --since date must be before --until date');
     process.exit(1);
   }
 
-  // Validate configuration
-  try {
-    validateConfig();
-  } catch (error) {
-    if (error instanceof ConfigError) {
-      console.error(`Configuration Error:\n${error.message}`);
-      process.exit(1);
-    }
-    throw error;
+  // Validate format
+  if (format !== 'markdown' && format !== 'json') {
+    logger.error('Error: --format must be "markdown" or "json"');
+    process.exit(1);
   }
 
-  const config = loadConfig();
+  // For dry-run, we don't need LLM config
+  if (!dryRun) {
+    try {
+      validateConfig();
+    } catch (error) {
+      if (error instanceof ConfigError) {
+        logger.error(`Configuration Error:\n${error.message}`);
+        process.exit(1);
+      }
+      throw error;
+    }
+  } else {
+    // Still need GitHub token
+    if (!process.env['GITHUB_TOKEN']) {
+      logger.error('Error: GITHUB_TOKEN environment variable is required');
+      process.exit(1);
+    }
+  }
 
-  console.log(`User: ${user}`);
-  console.log(`Period: ${since} to ${until}`);
-  console.log(`Output: ${out}`);
-  console.log('');
+  const config = dryRun
+    ? { githubToken: process.env['GITHUB_TOKEN']!, llmApiKey: '', llmModel: '' }
+    : loadConfig();
+
+  logger.log(`User: ${user}`);
+  logger.log(`Period: ${since} to ${until}`);
+  if (!dryRun) {
+    logger.log(`Output: ${out} (${format})`);
+  }
+  if (options.scope !== 'all') {
+    logger.log(`Scope: ${options.scope} repos only`);
+  }
+  if (options.repos?.length) {
+    logger.log(`Repos: ${options.repos.join(', ')}`);
+  }
+  if (options.orgs?.length) {
+    logger.log(`Orgs: ${options.orgs.join(', ')}`);
+  }
+  if (options.excludeRepos?.length) {
+    logger.log(`Excluding: ${options.excludeRepos.join(', ')}`);
+  }
+  if (dryRun) {
+    logger.log('Mode: Dry run (no LLM analysis)');
+  }
+  if (!cache) {
+    logger.log('Cache: Disabled');
+  }
+  logger.log('');
 
   try {
     // Step 1: Fetch PRs from GitHub
-    console.log('📥 Fetching data from GitHub...');
-    const githubClient = new GitHubClient(config.githubToken);
+    logger.log('📥 Fetching data from GitHub...');
+
+    const githubOptions: GitHubClientOptions = {
+      cache,
+      scope: options.scope,
+      repos: options.repos,
+      orgs: options.orgs,
+      excludeRepos: options.excludeRepos,
+      verbose: !options.quiet,
+    };
+
+    const githubClient = new GitHubClient(config.githubToken, githubOptions);
     const prs = await githubClient.fetchAllMergedPRs(user, since, until);
 
     if (prs.length === 0) {
-      console.log('');
-      console.log('No merged PRs found for the specified period.');
-      console.log('Make sure the GitHub token has access to the repositories.');
+      logger.log('');
+      logger.log('No merged PRs found for the specified period.');
+      logger.log('Make sure the GitHub token has access to the repositories.');
       process.exit(0);
     }
 
-    console.log(`Found ${prs.length} merged PRs total`);
-    console.log('');
+    logger.log(`Found ${prs.length} merged PRs total`);
 
-    // Step 2: Summarize PRs with LLM
-    console.log('🤖 Analyzing PRs with Gemini...');
+    // If dry-run, just print the PRs and exit
+    if (dryRun) {
+      printPRList(prs, logger);
+      process.exit(0);
+    }
+
+    logger.log('');
+
+    // Step 2: Summarize PRs with LLM (using batching)
+    logger.log('🤖 Analyzing PRs with Gemini...');
     const llmClient = createLLMClient(config.llmApiKey, config.llmModel);
     const summarizer = new LLMFeatureSummarizer(llmClient);
 
-    const features = await summarizePRs(prs, summarizer, (current, total) => {
-      process.stdout.write(`\r  Processing PR ${current}/${total}...`);
+    const features = await summarizePRsBatch(prs, summarizer, 5, (current, total) => {
+      logger.progress(`\r  Processing PRs: ${current}/${total}...`);
     });
-    console.log(''); // New line after progress
-    console.log(`Extracted ${features.length} features`);
-    console.log('');
+    logger.log(''); // New line after progress
+    logger.log(`Extracted ${features.length} features`);
+    logger.log('');
 
     // Step 3: Group features
-    console.log('📊 Grouping features...');
+    logger.log('📊 Grouping features...');
     const projectSummaries = groupFeatures(features);
     const stats = calculateStats(projectSummaries);
-    console.log(`Grouped into ${projectSummaries.length} projects`);
-    console.log(`After merging: ${stats.totalFeatures} unique features`);
-    console.log('');
+    logger.log(`Grouped into ${projectSummaries.length} projects`);
+    logger.log(`After merging: ${stats.totalFeatures} unique features`);
+    logger.log('');
 
     // Step 4: Generate report
-    console.log('📝 Generating report...');
+    logger.log('📝 Generating report...');
     const report: ImpactReport = {
       username: user,
       since,
@@ -159,45 +300,52 @@ async function runGenerate(options: GenerateOptions): Promise<void> {
       totalFeatures: stats.totalFeatures,
     };
 
-    await writeReport(report, out);
-    console.log(`Report written to: ${out}`);
-    console.log('');
+    // Output based on format
+    if (format === 'json') {
+      const outputPath = out.endsWith('.json') ? out : out.replace(/\.md$/, '.json');
+      await Bun.write(outputPath, JSON.stringify(report, null, 2));
+      logger.log(`Report written to: ${outputPath}`);
+    } else {
+      await writeReport(report, out);
+      logger.log(`Report written to: ${out}`);
+    }
+    logger.log('');
 
     // Print summary
-    console.log('╔════════════════════════════════════════╗');
-    console.log('║              Summary                   ║');
-    console.log('╠════════════════════════════════════════╣');
-    console.log(`║  Projects:    ${String(projectSummaries.length).padEnd(24)}║`);
-    console.log(`║  PRs Merged:  ${String(stats.totalPRs).padEnd(24)}║`);
-    console.log(`║  Features:    ${String(stats.totalFeatures).padEnd(24)}║`);
-    console.log('╚════════════════════════════════════════╝');
-    console.log('');
-    console.log('✅ Done!');
+    logger.log('╔════════════════════════════════════════╗');
+    logger.log('║              Summary                   ║');
+    logger.log('╠════════════════════════════════════════╣');
+    logger.log(`║  Projects:    ${String(projectSummaries.length).padEnd(24)}║`);
+    logger.log(`║  PRs Merged:  ${String(stats.totalPRs).padEnd(24)}║`);
+    logger.log(`║  Features:    ${String(stats.totalFeatures).padEnd(24)}║`);
+    logger.log('╚════════════════════════════════════════╝');
+    logger.log('');
+    logger.log('✅ Done!');
   } catch (error) {
-    console.log('');
+    logger.log('');
 
     if (error instanceof GitHubClientError) {
-      console.error(`GitHub API Error: ${error.message}`);
+      logger.error(`GitHub API Error: ${error.message}`);
       if (error.statusCode === 401) {
-        console.error('  Check that your GITHUB_TOKEN is valid.');
+        logger.error('  Check that your GITHUB_TOKEN is valid.');
       } else if (error.statusCode === 403) {
-        console.error('  You may have hit a rate limit. Try again later.');
+        logger.error('  You may have hit a rate limit. Try again later.');
       }
       process.exit(1);
     }
 
     if (error instanceof LLMClientError) {
-      console.error(`LLM API Error: ${error.message}`);
+      logger.error(`LLM API Error: ${error.message}`);
       if (error.statusCode === 401) {
-        console.error('  Check that your LLM_API_KEY is valid.');
+        logger.error('  Check that your LLM_API_KEY is valid.');
       }
       process.exit(1);
     }
 
     if (error instanceof Error) {
-      console.error(`Error: ${error.message}`);
+      logger.error(`Error: ${error.message}`);
     } else {
-      console.error('An unexpected error occurred');
+      logger.error('An unexpected error occurred');
     }
 
     process.exit(1);

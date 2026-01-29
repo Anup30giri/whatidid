@@ -3,14 +3,23 @@
   "version": "1.0.0",
   "description": "CLI tool to generate engineering impact reports from GitHub activity",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
   "bin": {
-    "whatidid": "./src/index.ts"
+    "whatidid": "./dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun run --watch src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "bun run build:compile",
+    "build:compile": "bun build src/index.ts --outdir dist --target node --minify",
+    "build:binary": "bun build src/index.ts --compile --outfile dist/whatidid",
+    "build:all": "bun run build:compile && bun run build:binary",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "bun run clean && bun run typecheck && bun run build"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -25,8 +34,21 @@
     "impact",
     "report",
     "cli",
-    "engineering"
+    "engineering",
+    "promo",
+    "self-review"
   ],
   "author": "Anup Giri",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Anup30giri/whatidid.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Anup30giri/whatidid/issues"
+  },
+  "homepage": "https://github.com/Anup30giri/whatidid#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }
