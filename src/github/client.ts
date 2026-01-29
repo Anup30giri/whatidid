@@ -97,6 +97,8 @@ export interface GitHubClientOptions {
   repos?: string[];
   orgs?: string[];
   excludeRepos?: string[];
+  /** Skip exhaustive org repo scanning (faster, relies on search API only) */
+  skipOrgScan?: boolean;
   verbose?: boolean;
 }
 
@@ -595,15 +597,20 @@ export class GitHubClient {
       const searchPRs = await this.fetchPRsViaGlobalSearch(username, since, until);
       this.log(`  Found ${searchPRs.length} PRs via search`);
 
-      const foundRepos = new Set(searchPRs.map((pr) => pr.repoFullName));
+      // Only scan org repos if not skipped
+      if (!this.options.skipOrgScan) {
+        const foundRepos = new Set(searchPRs.map((pr) => pr.repoFullName));
+        const orgPRs = await this.fetchPRsFromOrgRepos(username, since, until, foundRepos);
 
-      const orgPRs = await this.fetchPRsFromOrgRepos(username, since, until, foundRepos);
+        if (orgPRs.length > 0) {
+          this.log(`  Found ${orgPRs.length} additional PRs from org repos`);
+        }
 
-      if (orgPRs.length > 0) {
-        this.log(`  Found ${orgPRs.length} additional PRs from org repos`);
+        allPRs = [...searchPRs, ...orgPRs];
+      } else {
+        this.log(`  Skipping org repo scan (--fast mode)`);
+        allPRs = searchPRs;
       }
-
-      allPRs = [...searchPRs, ...orgPRs];
     }
 
     const uniquePRs = new Map<string, PullRequest>();

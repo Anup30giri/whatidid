@@ -74,6 +74,7 @@ export function createProgram(): Command {
     .option('--repos <repos>', 'Specific repos to include (comma-separated, owner/repo format)', parseList)
     .option('--orgs <orgs>', 'Organizations to include (comma-separated)', parseList)
     .option('--exclude-repos <repos>', 'Repos to exclude (comma-separated, owner/repo format)', parseList)
+    .option('--fast', 'Skip exhaustive org repo scanning (faster, uses search API only)')
     .option('--dry-run', 'Show PRs without LLM analysis')
     .option('--no-cache', 'Disable caching of GitHub API responses')
     .option('-v, --verbose', 'Verbose output')
@@ -104,6 +105,7 @@ interface GenerateOptions {
   repos?: string[];
   orgs?: string[];
   excludeRepos?: string[];
+  fast?: boolean;
   dryRun?: boolean;
   cache: boolean;
   verbose?: boolean;
@@ -227,6 +229,9 @@ async function runGenerate(options: GenerateOptions): Promise<void> {
   if (options.excludeRepos?.length) {
     logger.log(`Excluding: ${options.excludeRepos.join(', ')}`);
   }
+  if (options.fast) {
+    logger.log('Mode: Fast (skip org repo scanning)');
+  }
   if (dryRun) {
     logger.log('Mode: Dry run (no LLM analysis)');
   }
@@ -245,6 +250,7 @@ async function runGenerate(options: GenerateOptions): Promise<void> {
       repos: options.repos,
       orgs: options.orgs,
       excludeRepos: options.excludeRepos,
+      skipOrgScan: options.fast,
       verbose: !options.quiet,
     };
 

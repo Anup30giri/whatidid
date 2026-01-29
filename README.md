@@ -82,6 +82,7 @@ bun run src/index.ts generate \
 | `--repos <repos>` | Specific repos to include (comma-separated, owner/repo format) | All |
 | `--orgs <orgs>` | Organizations to include (comma-separated) | All |
 | `--exclude-repos <repos>` | Repos to exclude (comma-separated, owner/repo format) | None |
+| `--fast` | Skip exhaustive org repo scanning (faster, avoids rate limits) | Off |
 | `--dry-run` | Show PRs without LLM analysis | Off |
 | `--no-cache` | Disable caching of GitHub API responses | Cache enabled |
 | `-v, --verbose` | Verbose output | Off |
@@ -131,6 +132,13 @@ bun run src/index.ts generate \
   --since 2024-01-01 \
   --until 2024-12-31 \
   --orgs "my-company"
+
+# Fast mode - skip exhaustive org scanning (recommended for large orgs)
+bun run src/index.ts generate \
+  --user octocat \
+  --since 2024-01-01 \
+  --until 2024-12-31 \
+  --fast
 
 # Dry run to see PRs without LLM analysis
 bun run src/index.ts generate \
