@@ -225,6 +225,81 @@ bun run typecheck
 bun run src/index.ts --help
 ```
 
+## Building
+
+### Build Commands
+
+```bash
+# Build JavaScript bundle
+bun run build
+
+# Build standalone binary (no Bun runtime required to run)
+bun run build:binary
+
+# Build both
+bun run build:all
+
+# Clean build artifacts
+bun run clean
+```
+
+### Build Outputs
+
+| File | Description | Size |
+|------|-------------|------|
+| `dist/index.js` | Minified JavaScript bundle | ~83 KB |
+| `dist/whatidid` | Standalone binary (includes Bun runtime) | ~104 MB |
+
+### Using the Standalone Binary
+
+The standalone binary includes the Bun runtime, so it can run on any machine without installing Bun:
+
+```bash
+# Build the binary
+bun run build:binary
+
+# Run it directly
+./dist/whatidid generate --user octocat --since 2024-01-01 --until 2024-12-31
+
+# Or copy to a location in your PATH
+sudo cp dist/whatidid /usr/local/bin/
+whatidid --help
+```
+
+### Cross-Platform Builds
+
+To build for different platforms:
+
+```bash
+# Linux x64 (default)
+bun build src/index.ts --compile --outfile dist/whatidid-linux-x64
+
+# macOS x64
+bun build src/index.ts --compile --outfile dist/whatidid-darwin-x64 --target=bun-darwin-x64
+
+# macOS ARM64 (Apple Silicon)
+bun build src/index.ts --compile --outfile dist/whatidid-darwin-arm64 --target=bun-darwin-arm64
+
+# Windows x64
+bun build src/index.ts --compile --outfile dist/whatidid-windows-x64.exe --target=bun-windows-x64
+```
+
+## Installing Globally
+
+```bash
+# Install globally with bun
+bun link
+
+# Now you can use it from anywhere
+whatidid --help
+```
+
+Or install from the repository:
+
+```bash
+bun install -g github:Anup30giri/whatidid
+```
+
 ## License
 
 MIT
