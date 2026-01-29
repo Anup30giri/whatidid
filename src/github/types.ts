@@ -23,6 +23,17 @@ export interface GitHubOwner {
 }
 
 /**
+ * GitHub organization
+ */
+export interface GitHubOrganization {
+  login: string;
+  id: number;
+  url: string;
+  repos_url: string;
+  description: string | null;
+}
+
+/**
  * GitHub repository response
  */
 export interface GitHubRepository {

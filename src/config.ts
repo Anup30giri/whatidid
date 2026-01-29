@@ -24,7 +24,7 @@ function requireEnv(name: string): string {
   if (!value || value.trim() === '') {
     throw new ConfigError(
       `Missing required environment variable: ${name}\n` +
-      `Please set ${name} before running the command.`
+        `Please set ${name} before running the command.`,
     );
   }
   return value.trim();
@@ -45,7 +45,7 @@ export function loadConfig(): Config {
   return {
     githubToken: requireEnv('GITHUB_TOKEN'),
     llmApiKey: requireEnv('LLM_API_KEY'),
-    llmModel: optionalEnv('LLM_MODEL', 'gemini-2.5-flash-preview-05-20'),
+    llmModel: optionalEnv('LLM_MODEL', 'gemini-2.5-flash'),
   };
 }
 
@@ -55,22 +55,22 @@ export function loadConfig(): Config {
  */
 export function validateConfig(): void {
   const missingVars: string[] = [];
-  
+
   if (!process.env['GITHUB_TOKEN']) {
     missingVars.push('GITHUB_TOKEN');
   }
-  
+
   if (!process.env['LLM_API_KEY']) {
     missingVars.push('LLM_API_KEY');
   }
-  
+
   if (missingVars.length > 0) {
     throw new ConfigError(
       `Missing required environment variables:\n` +
-      missingVars.map(v => `  - ${v}`).join('\n') +
-      `\n\nPlease set these variables before running the command:\n` +
-      `  export GITHUB_TOKEN=your_github_token\n` +
-      `  export LLM_API_KEY=your_google_api_key`
+        missingVars.map((v) => `  - ${v}`).join('\n') +
+        `\n\nPlease set these variables before running the command:\n` +
+        `  export GITHUB_TOKEN=your_github_token\n` +
+        `  export LLM_API_KEY=your_google_api_key`,
     );
   }
 }
